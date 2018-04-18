@@ -1,0 +1,13 @@
+# Bibliotecas
+import nltk
+import numpy as np
+import pandas as pd
+
+
+news_df = pd.read_csv("/home/luizaf/SRI/mini-project-1/data/local_newspaper_news(pt-br).csv", engine = "python")
+
+# Construção de índice invertido
+# A melhor estrutura de dados para se utilizar na construção do índice invertido é tabela hash.
+# Em Python, dicionários são implementados utilizando tabelas hash. Dicionário é um array cujos índeces 
+# são obtidos aplicando uma função hash nas chaves.
+def create_index(df):
