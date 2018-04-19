@@ -3,13 +3,12 @@ import nltk
 import numpy as np
 import pandas as pd
 
-news_df = pd.read_csv("data/local_newspaper_news(pt-br).csv", engine = "python")
-
 # Construção de índice invertido
 # A melhor estrutura de dados para se utilizar na construção do índice invertido é tabela hash.
 # Em Python, dicionários são implementados utilizando tabelas hash. Dicionário é um array cujos índeces
 # são obtidos aplicando uma função hash nas chaves.
 def create_indexer(df):
+    global indexer
     indexer = {}
 
     for index, row in df.iterrows():
@@ -23,37 +22,61 @@ def create_indexer(df):
             else:
                 indexer[term] = set([doc_id])
 
-    return indexer
 
 def preprocess(text):
     return text.lower()
 
-news_indexer = create_indexer(news_df)
-
 def and_search(term1, term2):
-    result = []
-
     term1 = preprocess(term1)
     term2 = preprocess(term2)
 
-    posting1 = news_indexer[term1]
-    posting2 = news_indexer[term2]
+    posting1 = indexer[term1]
+    posting2 = indexer[term2]
 
-    iterator1 = iter(posting1)
-    iterator2 = iter(posting2)
+    return (posting1 & posting2)
 
-    element1 = next(iterator1, None)
-    element2 = next(iterator2, None)
+def or_search(term1, term2):
+    term1 = preprocess(term1)
+    term2 = preprocess(term2)
 
-    while (element1 != None) and (element2 != None):
-        if element1 == element2:
-            result.append(element1)
-        elif element1 < element2:
-            element1 = next(iterator1, None)
-        else:
-            element2 = next(iterator2, None)
+    posting1 = indexer[term1]
+    posting2 = indexer[term2]
 
-    print("result")
+    return (posting1 | posting2)
+
+def search(query):
+    and_op = " AND "
+    or_op = " OR "
+
+    if and_op in query:
+        terms = query.split(and_op)
+        return and_search(terms[0], terms[1])
+    elif or_op in query:
+        terms = query.split(or_op)
+        return or_search(terms[0], terms[1])
+    else:
+        query = preprocess(query)
+        return indexer[query]
 
 
-and_search("Campina", "Grande")
+news_df = pd.read_csv("data/local_newspaper_news(pt-br).csv", engine = "python")
+
+create_indexer(news_df)
+
+assert len(search("debate OR presidencial")) == 1770
+assert len(search("debate AND presidencial")) == 201
+
+assert len(search("presidenciáveis OR corruptos")) == 164
+assert len(search("presidenciáveis AND corruptos")) == 0
+
+assert len(search("Belo OR Horizonte")) == 331
+assert len(search("Belo AND Horizonte")) == 242
+
+# Bônus
+def conjunctive_search(query):
+    and_op = " AND "
+
+    terms = query.split(and_op)
+
+    for i in range(0, len(terms)):
+        terms[i] = preprocess(terms[i])
