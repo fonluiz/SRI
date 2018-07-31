@@ -1,0 +1,157 @@
+---
+title: 'Projeto Final: Análise de Sentimentos no Twitter'
+author: "Luiz Alberto Fonseca"
+date: "31 de julho de 2018"
+output:
+  html_notebook: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+## Introdução
+
+Nesta tarefa, irei realizar uma análise de sentimentos com dados da rede social Twitter. Os tweets serão classificados em positivos ou negativos de acordo com a mensagem que eles passam (negatividade ou positividade).
+
+Para alcançar tal objetivo precisaremos vetorizar os tweets, isto é, para cada tweet iremos associar um valor booleano a cada palavra do conjunto de palavras que dispomos. Então, considerando todas as palavras da base de dados, iremos criar uma matriz esparsa onde cada coluna representa uma palavra e cada linha representa um tweet e se uma palavra está contida em um tweet então na coordenada linha-coluna (tweet-palavra) correspondente da matriz aparecerá o valor 1 e caso contrário aparecerá o valor 0. Feito isso, iremos utilizar essa matriz como entrada de um algoritmo de classificação, que nos retornará um modelo de classificação, que utilizaremos para analisar o sentimento de outros tweets.
+
+Dispomos de uma base de dados com cerca de 60 mil tweets já classificados. Abaixo podemos ter uma noção de como estes dados estão organizados.
+
+```{r}
+library(readr)
+
+tweets <- read_delim("./db.csv", "\t", escape_double = FALSE, trim_ws = TRUE)
+
+head(tweets, 6)
+```
+
+## Limpeza dos dados
+
+Como podemos ver na coluna <b>text</b>, os tweets contém muitos elementos típicos da linguagem da internet que não serão úteis quando formos criar a matriz. Elementos como menções (palavras que começam com '@'), hashtags (palavras que começam com '#'), urls, números, pontuação e emojis deverão ser retirados do texto do tweet para que nos reste somente palavras que consigam carregar algum sentimento.
+
+```{r}
+#' Remove elementos indesejados do corpo dos tweets
+clean_data <- function(data) {
+  data$text <- gsub("#([a-z|A-Z|0-9|_])*","", data$text)  # remove hashtags
+  data$text <- gsub('@([a-z|A-Z|0-9|_])*', '', data$text) # remove palavras com @ (menções)
+  data$text <- gsub('https://','', data$text)             # remove https://
+  data$text <- gsub('[^[:graph:]]', ' ', data$text)       # remove caracteres gráficos como emojis
+  data$text <- gsub('[[:punct:]]', '', data$text)         # remove pontuação 
+  data$text <- gsub('[[:cntrl:]]', '', data$text)         # remove caracteres de controle
+  data$text <- gsub("\\w*[0-9]+\\w*\\s*", "", data$text)  # remove palavras com números
+  data$text <- tolower(data$text)                         # coloca o texto em caixa baixa
+  
+  return(data)
+}
+
+tweets <- clean_data(tweets)
+```
+
+Vamos dar uma olhada em como ficaram os dados depois dessa limpeza.
+
+```{r}
+head(tweets, 6)
+```
+
+## Criando a matriz 
+
+Agora iremos criar a matriz de tweets x palavras, também conhecida como DTM (Documento Term Matrix).
+
+```{r}
+library(dplyr)
+library(text2vec)
+
+# Separa os tweets em uma lista de palavras
+tokens = tweets$text %>% word_tokenizer
+
+# Cria um iterador sobre os tokens para facilitar a criação da DTM
+it_train = itoken(tokens, 
+                  ids = tweets$id,
+                  # Desativa a barra de progresso pois ela não fica legal no rmd
+                  progressbar = FALSE)
+
+# Cria um vocabulário com a lista de palavras (tokens)
+vocab = create_vocabulary(it_train)
+
+# Cria um vetorizador que define como transformar uma lista de tokens em um espaço vetorial,
+# isto é, como mapear palavras em índices.
+vectorizer = vocab_vectorizer(vocab)
+
+# Cria a Matriz Documento-Termo (DTM)
+dtm_train = create_dtm(it_train, vectorizer)
+
+# Exibe as dimensões da matriz
+dim(dtm_train)
+```
+
+Como podemos ver acima, a matriz criada possui 58096 linhas, que correspondem aos tweets e 38079 colunas, que correspondem ao total de palavras no nosso vocabulário.
+
+## Criando o classificador
+
+Com a matriz em mãos, iremos utilizá-la como entrada de um algoritmo de classificação. O algoritmo escolhido foi o [glmnet](https://cran.r-project.org/web/packages/glmnet/index.html) (Lasso and Elastic-Net Regularized Generalized Linear Models). Abaixo temos o código que roda o treinamento em cima da DTM e gera um modelo de classificação como saída.
+
+```{r}
+library(glmnet)
+NFOLDS = 4
+
+classifier = cv.glmnet(x = dtm_train, y = tweets[['sentiment']], 
+                              family = 'binomial', 
+                              # penalidade L1 
+                              alpha = 1,
+                              # Interesse na área abaixo da curva ROC
+                              type.measure = "auc",
+                              # Validação cruzada 5-fold
+                              nfolds = NFOLDS,
+                              # Um valor alto é menos acurado, mas agiliza o treinamento
+                              thresh = 1e-3,
+                              # Um número pequeno de iterações para agilizar o treinamento
+                              maxit = 1e3)
+```
+
+## Testando o classificador
+
+Para testar o nosso modelo criado, eu peguei tweets nao utilizados no treinamento do classificador e os classifiquei eu mesmo em <i>positivo</i> ou <i>negativo</i>. Os tweets foram coletados da API do Twitter utilizando as consultas "neymar AND copa" e "anitta AND medicina". Ao todo foram coletados e classificados 118 tweets.
+
+Feito isso iremos ver a classificação gerada pelo classificador treinado e compará-la com a minha classificação.
+
+Os dados de teste devem passar pelo mesmo preprocessamento que os dados de treino. 
+
+```{r, messages = F}
+# Lê os daddos de teste
+test <- read_csv("./test.csv")
+
+# Limpa os dados de teste
+test <- clean_data(test)
+
+# Cria um iterador para os dados de teste
+it_test = test$text %>% 
+  word_tokenizer %>% 
+  itoken(ids = test$id, progressbar = FALSE)
+
+# Cria a DTM para os dados de teste
+dtm_test = create_dtm(it_test, vectorizer)
+
+# Gera a classificação utilizando o classificador treinado
+preds = predict(classifier, dtm_test, type = 'response')[,1]
+preds = round(preds)
+
+# Verifica a acurácia do classificador
+library(MLmetrics)
+Accuracy(preds, test$sentiment)
+```
+
+A acurácia do teste deu 0.45, ou seja, o classificador conseguiu acertar em 45% dos casos. Pode parecer um número baixo, mas para um classificador tão simples acredito que seja razoável.
+
+## Considerações finais
+
+Algumas melhorias que poderiam ser feitas para que o modelo apresentace uma performance melhor:
+<ul>
+<li>Remover stop words (palavras muito comuns como "e", "ou", "de", "da", etc)</li>
+<li>Utilizar bigramas ou n-gramas ao invés de palavras</li>
+<li>Utilizar técnicas como TF-IDF ao invés da simples contagem binária na criação da matriz</li>
+</ul>
+
+
+
